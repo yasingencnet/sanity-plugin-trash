@@ -18,7 +18,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/yasingencnet/sanity-plugin-trash"
+    "url": "git+https://github.com/yasingencnet/sanity-plugin-trash.git"
   },
   "license": "MIT",
   "author": "Yasin Genc <yasingenc93@gmail.com>",
