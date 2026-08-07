@@ -1,0 +1,70 @@
+{
+  "name": "sanity-plugin-trash",
+  "version": "1.0.0",
+  "description": "WordPress-style Trash for Sanity Studio — browse deleted documents from any schema type and restore them as drafts, with search, previews, and permanent delete",
+  "keywords": [
+    "sanity",
+    "sanity-plugin",
+    "trash",
+    "recycle-bin",
+    "restore",
+    "deleted-documents",
+    "history",
+    "undelete"
+  ],
+  "homepage": "https://github.com/yasingencnet/sanity-plugin-trash#readme",
+  "bugs": {
+    "url": "https://github.com/yasingencnet/sanity-plugin-trash/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yasingencnet/sanity-plugin-trash"
+  },
+  "license": "MIT",
+  "author": "Yasin Genc <yasingenc93@gmail.com>",
+  "sideEffects": false,
+  "type": "module",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "plugin-kit verify-package --silent && pkg-utils build --strict --check --clean",
+    "format": "oxfmt",
+    "link-watch": "plugin-kit link-watch",
+    "lint": "oxlint",
+    "prepublishOnly": "npm run build",
+    "watch": "pkg-utils watch --strict"
+  },
+  "dependencies": {
+    "@sanity/icons": "^5.2.1",
+    "@sanity/ui": "^3.5.1"
+  },
+  "devDependencies": {
+    "@sanity/pkg-utils": "^11.0.17",
+    "@sanity/plugin-kit": "^10.0.4",
+    "@types/react": "^19.2.18",
+    "oxfmt": "^0.61.0",
+    "oxlint": "^1.77.0",
+    "oxlint-tsgolint": "^7.0.2001",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "sanity": "^6.9.1",
+    "styled-components": "^6.5.1",
+    "typescript": "^6.0.3"
+  },
+  "peerDependencies": {
+    "react": "^18 || ^19",
+    "sanity": "^5 || ^6.0.0-0"
+  },
+  "engines": {
+    "node": ">=20.19 <22 || >=22.12"
+  }
+}
