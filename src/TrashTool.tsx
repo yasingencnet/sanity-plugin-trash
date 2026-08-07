@@ -238,7 +238,7 @@ export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
         </Flex>
         <Text size={1} muted>
           Documents deleted from this dataset, recovered from its transaction history. Restore
-          recreates a document as a draft with its original ID — review and publish it to put it
+          recreates a document as a draft with its original ID. Review and publish it to put it
           back on the site.
         </Text>
 
@@ -326,7 +326,7 @@ export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
             <Text align="center" muted>
               {query.trim()
                 ? 'No deleted documents match your search.'
-                : 'Trash is empty — no deleted documents found in the selected period.'}
+                : 'Trash is empty: no deleted documents found in the selected period.'}
             </Text>
           </Card>
         )}
@@ -412,7 +412,7 @@ export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
                 {selectedDocs.slice(0, 8).map((doc) => (
                   <Text key={doc.id} size={1}>
                     • {doc.title ?? doc.id}
-                    {doc.type ? ` — ${doc.type}` : ''}
+                    {doc.type ? ` (${doc.type})` : ''}
                   </Text>
                 ))}
                 {selectedDocs.length > 8 && (

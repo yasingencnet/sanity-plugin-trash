@@ -1,19 +1,19 @@
 # sanity-plugin-trash
 
-A WordPress-style **Trash** for Sanity Studio: browse documents that were deleted from your dataset and restore them as drafts — for **any** schema type, with zero configuration.
+A Trash for Sanity Studio: browse documents that were deleted from your dataset and restore them as drafts, for any schema type, with zero configuration.
 
 Sanity has no built-in trash or recycle bin. When a document is deleted it disappears from every list, and recovering it means scripting against the History API. This plugin turns that into a Studio tool: a navbar **Trash** view that reconstructs deletions from the dataset's transaction log, so it even works retroactively for documents deleted before the plugin was installed.
 
 ## Features
 
-- **Works with every schema type automatically** — deletions are discovered from the transaction log, not per-type configuration. Filter tabs are built from whatever was actually deleted.
-- **Restore as draft** — restoring recreates the document as a *draft* with its **original ID** (so references reconnect when published). Nothing goes back on your live site until an editor reviews and publishes it. When a deleted document had a draft with newer work than its published version, that newer content is what gets restored.
-- **Human-readable previews** — a details dialog renders the deleted document's content using your schema's field titles, with rich-text excerpts, image thumbnails, and resolved reference titles. References whose targets are also deleted get flagged, with a warning that publishing will fail until they're restored too. Raw JSON is available behind an "Advanced" toggle.
-- **Search & filters** — search by title, slug, type, or ID; filter by document type; pick a scan window (24 hours to 90 days).
-- **Delete permanently** — multi-select with select-all, guarded by a confirmation dialog. Purged entries disappear from the Trash for **all** Studio users (state is stored in a hidden `trash.purged` document in the dataset).
-- **Permission-aware** — Restore and Delete permanently are disabled (with an explanatory tooltip) for users whose role can't perform them, using the Studio's own grants system.
-- **Retention honesty** — the tool shows how far back your dataset's transaction history reaches, so an empty trash is never falsely reassuring.
-- **Noise-free** — publishes, draft discards, and unpublishes are correctly excluded: a document only appears in the Trash when *neither* its published version *nor* its draft exists.
+- **Works with every schema type automatically.** Deletions are discovered from the transaction log, not per-type configuration. Filter tabs are built from whatever was actually deleted.
+- **Restore as draft.** Restoring recreates the document as a *draft* with its **original ID**, so references reconnect when published. Nothing goes back on your live site until an editor reviews and publishes it. When a deleted document had a draft with newer work than its published version, that newer content is what gets restored.
+- **Human-readable previews.** A details dialog renders the deleted document's content using your schema's field titles, with rich-text excerpts, image thumbnails, and resolved reference titles. References whose targets are also deleted get flagged, with a warning that publishing will fail until they're restored too. Raw JSON is available behind an "Advanced" toggle.
+- **Search and filters.** Search by title, slug, type, or ID; filter by document type; pick a scan window (24 hours to 90 days).
+- **Delete permanently.** Multi-select with select-all, guarded by a confirmation dialog. Purged entries disappear from the Trash for **all** Studio users (state is stored in a hidden `trash.purged` document in the dataset).
+- **Permission-aware.** Restore and Delete permanently are disabled (with an explanatory tooltip) for users whose role can't perform them, using the Studio's own grants system.
+- **Retention display.** The tool shows how far back your dataset's transaction history reaches, so an empty trash is never falsely reassuring.
+- **Noise-free.** Publishes, draft discards, and unpublishes are correctly excluded: a document only appears in the Trash when *neither* its published version *nor* its draft exists.
 
 ## Installation
 
@@ -58,15 +58,15 @@ export default defineConfig({
 })
 ```
 
-## How it works (and honest limitations)
+## How it works
 
-Sanity deletion is real — there is no soft delete. This plugin reconstructs a *virtual* trash from the dataset's **transaction log**:
+Sanity deletion is real: there is no soft delete. This plugin reconstructs a *virtual* trash from the dataset's **transaction log**.
 
 - Deletions are found by scanning transactions and checking which touched documents no longer exist (in either published or draft form).
-- Restore fetches the document's last pre-deletion revision from the History API and recreates it as a draft via `createIfNotExists` — an existing document is never overwritten.
-- **Retention applies.** Transaction history is only kept for your plan's retention window (shown at the bottom of the tool). Documents deleted before that window are unrecoverable — keep dataset export backups for anything older.
-- **"Delete permanently" hides, it cannot scrub.** Sanity's transaction history is immutable; purging removes entries from the Trash UI for all users (recorded in a hidden `trash.purged` document, keyed by deletion so a future re-deletion of a recreated document still shows up), but raw revisions remain readable via the History API until retention expires. The confirmation dialog says exactly this.
-- Deletions made outside the Studio (CLI, API scripts) are found too — the transaction log sees everything.
+- Restore fetches the document's last pre-deletion revision from the History API and recreates it as a draft via `createIfNotExists`. An existing document is never overwritten.
+- **Retention applies.** Transaction history is only kept for your plan's retention window (shown at the bottom of the tool). Documents deleted before that window are unrecoverable, so keep dataset export backups for anything older.
+- **"Delete permanently" hides, it cannot scrub.** Sanity's transaction history is immutable. Purging removes entries from the Trash UI for all users (recorded in a hidden `trash.purged` document, keyed by deletion so a future re-deletion of a recreated document still shows up), but raw revisions remain readable via the History API until retention expires. The confirmation dialog says exactly this.
+- Deletions made outside the Studio (CLI, API scripts) are found too. The transaction log sees everything.
 
 ## Programmatic API
 
@@ -74,7 +74,7 @@ The underlying data layer is exported for scripts (e.g. `sanity exec` recovery t
 
 ```ts
 import {
-  findDeletedDocuments, // scan + classify deletions since a timestamp
+  findDeletedDocuments, // scan and classify deletions since a timestamp
   loadRevision,         // fetch a deleted doc's last pre-deletion revision
   restoreDeleted,       // recreate as draft with original id
   restoreTarget,        // the exact draft a restore would create

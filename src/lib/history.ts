@@ -1,11 +1,11 @@
 /**
- * Pure data layer for the Trash tool. No React — everything takes a Sanity
+ * Pure data layer for the Trash tool. No React: everything takes a Sanity
  * client, so the same code runs in the Studio and in Node harnesses/tests.
  *
  * "Trash" is virtual: Sanity has no soft delete, so deleted documents only
  * exist in the dataset's transaction log (bounded by the plan's history
- * retention). This module finds real deletions in that log — filtering out
- * the draft-delete noise that publish/discard operations produce — and
+ * retention). This module finds real deletions in that log, filtering out
+ * the draft-delete noise that publish/discard operations produce, and
  * restores documents from their last pre-deletion revision.
  */
 import type {SanityClient} from 'sanity'
@@ -66,7 +66,7 @@ export async function getPurged(client: SanityClient): Promise<Set<string>> {
 
 /**
  * "Delete permanently": hide these trash entries from the Trash tool for all
- * Studio users. Sanity's transaction history itself is immutable — the raw
+ * Studio users. Sanity's transaction history itself is immutable: the raw
  * revisions remain readable via the history API until retention expires.
  */
 export async function purgeFromTrash(client: SanityClient, docs: DeletedDoc[]): Promise<void> {
@@ -89,7 +89,7 @@ function isSystemId(id: string): boolean {
 
 /**
  * Scan the transaction log since `fromTime` and return documents that were
- * touched in the window but no longer exist — classified so that drafts
+ * touched in the window but no longer exist, classified so that drafts
  * consumed by a publish/discard (published doc still exists) are excluded.
  */
 export async function findDeletedDocuments(
@@ -127,7 +127,7 @@ export async function findDeletedDocuments(
 
   // Existence must also cover each id's counterpart, even when the window
   // never touched it: the draft of a deleted published doc may exist (the doc
-  // lives on unpublished — e.g. an unpublish, or a trash restore-as-draft),
+  // lives on unpublished, e.g. an unpublish or a trash restore-as-draft),
   // and the published doc of a deleted draft may exist (just a discard).
   const toCheck = new Set<string>(ids)
   for (const id of ids) {
@@ -186,7 +186,7 @@ export async function findDeletedDocuments(
   return result.sort((a, b) => b.deletedAt.localeCompare(a.deletedAt))
 }
 
-/** Timestamp 1s before `iso` — the last instant the doc verifiably existed. */
+/** Timestamp 1s before `iso`, the last instant the doc verifiably existed. */
 function justBefore(iso: string): string {
   return new Date(new Date(iso).getTime() - 1000).toISOString()
 }
@@ -243,8 +243,8 @@ export async function loadRevision(client: SanityClient, doc: DeletedDoc): Promi
  * The document a restore would create: always a DRAFT (`drafts.` + original
  * id), carrying the newest recovered content (the deleted draft when it was newer
  * than the published revision). Restoring as a draft keeps restored content
- * off the live site until an editor reviews and publishes it — and draft
- * creation doesn't validate strong references, so a document pointing at
+ * off the live site until an editor reviews and publishes it. Draft
+ * creation also skips strong reference validation, so a document pointing at
  * still-deleted documents can be restored first and repaired before publish.
  *
  * Exported separately so the UI can permission-check the exact document that
@@ -271,7 +271,7 @@ export async function restoreDeleted(client: SanityClient, doc: DeletedDoc): Pro
 }
 
 /**
- * The timestamp of the oldest transaction still retained for this dataset —
+ * The timestamp of the oldest transaction still retained for this dataset,
  * the horizon of what the trash can see. Deletions before it are gone for
  * good (short of a dataset export backup).
  */

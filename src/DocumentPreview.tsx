@@ -2,7 +2,7 @@
  * Generic human-readable rendering of a recovered document revision. Works
  * for any schema type: field labels come from the schema when available,
  * portable text collapses to a plain-text excerpt, images render as CDN
- * thumbnails, and references resolve to live document titles — flagging
+ * thumbnails, and references resolve to live document titles, flagging
  * references whose targets are themselves deleted.
  */
 import {useEffect, useMemo, useState} from 'react'
@@ -169,7 +169,7 @@ function renderValue(v: any, ctx: Ctx, depth: number): ReactNode {
     }
     if (depth < 1) {
       const entries = Object.entries(v).filter(([k, x]) => !k.startsWith('_') && !isEmpty(x))
-      if (entries.length === 0) return <Text size={1} muted>—</Text>
+      if (entries.length === 0) return <Text size={1} muted>-</Text>
       return (
         <Stack space={2}>
           {entries.map(([key, x]) => (
@@ -190,7 +190,7 @@ function renderValue(v: any, ctx: Ctx, depth: number): ReactNode {
 
   return (
     <Text size={1} muted>
-      —
+      -
     </Text>
   )
 }

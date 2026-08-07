@@ -102,7 +102,7 @@ export function DetailDialog(props: {
           <ContentSection
             label={`Newer draft (edited ${new Date(
               doc.draftRevision._updatedAt,
-            ).toLocaleString()}) — this version is what gets restored`}
+            ).toLocaleString()}). This is the version that gets restored`}
             value={doc.draftRevision}
           />
         )}
@@ -113,7 +113,7 @@ export function DetailDialog(props: {
             justify="flex-start"
             fontSize={1}
             icon={advanced ? ChevronDownIcon : ChevronRightIcon}
-            text="Advanced — raw document JSON"
+            text="Advanced: raw document JSON"
             onClick={() => setAdvanced((v) => !v)}
           />
           {advanced && doc.revision && <RevisionJson value={doc.revision} />}
@@ -150,7 +150,7 @@ function DetailRow(props: {label: string; value?: string}) {
         </Text>
       </Box>
       <Text size={1} style={{wordBreak: 'break-all'}}>
-        {props.value ?? '—'}
+        {props.value ?? '-'}
       </Text>
     </Flex>
   )

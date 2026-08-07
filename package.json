@@ -1,7 +1,7 @@
 {
   "name": "sanity-plugin-trash",
   "version": "1.0.0",
-  "description": "WordPress-style Trash for Sanity Studio — browse deleted documents from any schema type and restore them as drafts, with search, previews, and permanent delete",
+  "description": "Trash for Sanity Studio: browse deleted documents from any schema type and restore them as drafts, with search, previews, and permanent delete",
   "keywords": [
     "sanity",
     "sanity-plugin",

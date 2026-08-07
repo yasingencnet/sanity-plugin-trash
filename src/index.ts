@@ -13,11 +13,11 @@ export interface TrashToolConfig {
 }
 
 /**
- * A WordPress-style Trash for Sanity Studio.
+ * A Trash tool for Sanity Studio.
  *
- * Adds a navbar tool listing documents deleted from the dataset — recovered
- * from the transaction log, so it works retroactively and for every schema
- * type — with search, per-type filters, a human-readable content preview,
+ * Adds a navbar tool listing documents deleted from the dataset, recovered
+ * from the transaction log so it works retroactively and for every schema
+ * type, with search, per-type filters, a human-readable content preview,
  * and one-click restore. Restore always recreates the document as a draft
  * with its original id, so nothing goes live without an editor publishing it.
  *
