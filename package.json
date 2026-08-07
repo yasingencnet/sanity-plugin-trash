@@ -1,6 +1,6 @@
 {
   "name": "sanity-plugin-trash",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Trash for Sanity Studio: browse deleted documents from any schema type and restore them as drafts, with search, previews, and permanent delete",
   "keywords": [
     "sanity",
@@ -44,8 +44,8 @@
     "watch": "pkg-utils watch --strict"
   },
   "dependencies": {
-    "@sanity/icons": "^5.2.1",
-    "@sanity/ui": "^3.5.1"
+    "@sanity/icons": "^3.7.0",
+    "@sanity/ui": "^3.2.0"
   },
   "devDependencies": {
     "@sanity/pkg-utils": "^11.0.17",
