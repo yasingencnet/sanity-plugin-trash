@@ -9,6 +9,7 @@ import {useEffect, useMemo, useState} from 'react'
 import {Badge, Box, Flex, Stack, Text} from '@sanity/ui'
 import {useClient, useDataset, useProjectId, useSchema} from 'sanity'
 import type {ReactNode} from 'react'
+import {titleOf} from './lib/saved'
 
 const API_VERSION = '2025-02-19'
 
@@ -46,7 +47,7 @@ export function DocumentPreview(props: {
     let alive = true
     client
       .fetch(
-        '*[_id in $ids]{_id, title, name, label}',
+        '*[_id in $ids]{_id, title, name, label, heading}',
         {ids: [...refIds, ...refIds.map((id) => `drafts.${id}`)]},
         {perspective: 'raw', tag: 'trash.refs'} as any,
       )
@@ -58,7 +59,7 @@ export function DocumentPreview(props: {
           const doc =
             found.find((d) => d._id === id) ?? found.find((d) => d._id === `drafts.${id}`)
           if (doc) {
-            map.set(id, {title: doc.title ?? doc.name ?? doc.label ?? id})
+            map.set(id, {title: titleOf(doc) ?? id})
           } else {
             map.set(id, {missing: true})
             missing++
@@ -116,6 +117,23 @@ function renderValue(v: any, ctx: Ctx, depth: number): ReactNode {
   if (typeof v === 'number' || typeof v === 'boolean') return <Text size={1}>{String(v)}</Text>
 
   if (Array.isArray(v)) {
+    // Translated fields (sanity-plugin-internationalized-array): one line per language.
+    const translated = (x: any) =>
+      typeof x?._type === 'string' && x._type.startsWith('internationalizedArray')
+    if (v.every(translated)) {
+      return (
+        <Stack space={2}>
+          {v.map((item, index) => (
+            <Flex key={item._key ?? index} gap={2}>
+              <Text size={1} muted>
+                {String(item.language ?? item._key).toUpperCase()}
+              </Text>
+              <Box flex={1}>{renderValue(item.value, ctx, depth + 1)}</Box>
+            </Flex>
+          ))}
+        </Stack>
+      )
+    }
     if (v.some((b) => b?._type === 'block')) {
       return (
         <Text size={1} style={{whiteSpace: 'pre-wrap'}}>
