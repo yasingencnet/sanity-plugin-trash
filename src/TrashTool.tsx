@@ -36,6 +36,7 @@ const WINDOWS = [
   {days: 7, label: 'Last 7 days'},
   {days: 30, label: 'Last 30 days'},
   {days: 90, label: 'Last 90 days'},
+  {days: 0, label: 'All time'},
 ] as const
 
 type Status = 'loading' | 'ready' | 'error'
@@ -81,7 +82,8 @@ export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
       .then(setHorizon)
       .catch(() => {})
     try {
-      const fromTime = new Date(Date.now() - windowDays * 86_400_000).toISOString()
+      const from = windowDays ? Date.now() - windowDays * 86_400_000 : 0
+      const fromTime = new Date(from).toISOString()
       const found = await findDeletedDocuments(client, fromTime)
       setItems(found)
       setStatus('ready')
@@ -237,9 +239,9 @@ export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
           />
         </Flex>
         <Text size={1} muted>
-          Documents deleted from this dataset, recovered from its transaction history. Restore
-          recreates a document as a draft with its original ID. Review and publish it to put it
-          back on the site.
+          Documents deleted from this dataset, kept until they are restored or deleted
+          permanently. Restore recreates a document as a draft with its original ID. Review and
+          publish it to put it back on the site.
         </Text>
 
         {status === 'ready' && items.length > 0 && (
@@ -276,13 +278,13 @@ export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
         {status === 'loading' && (
           <Flex align="center" justify="center" padding={6} gap={3}>
             <Spinner />
-            <Text muted>Scanning transaction history…</Text>
+            <Text muted>Loading the trash…</Text>
           </Flex>
         )}
 
         {status === 'error' && (
           <Card tone="critical" padding={4} radius={2}>
-            <Text>Could not scan history: {error}</Text>
+            <Text>Could not load the trash: {error}</Text>
           </Card>
         )}
 
@@ -356,9 +358,8 @@ export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
 
         {horizon && (
           <Text size={1} muted>
-            Transaction history for this dataset goes back to{' '}
-            {new Date(horizon).toLocaleDateString()}. Documents deleted before then cannot be
-            found or restored.
+            Documents deleted outside the Studio are found in the transaction history, which
+            goes back to {new Date(horizon).toLocaleDateString()} for this dataset.
           </Text>
         )}
       </Stack>
@@ -423,8 +424,9 @@ export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
               </Stack>
             </Card>
             <Text size={0} muted>
-              Note: Sanity’s underlying transaction history is immutable. Raw revisions remain
-              accessible through the history API until your plan’s retention window expires.
+              Note: their saved copies are deleted, but Sanity’s underlying transaction history
+              is immutable. Raw revisions remain accessible through the history API until your
+              plan’s retention window expires.
             </Text>
           </Stack>
         </Dialog>

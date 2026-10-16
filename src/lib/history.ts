@@ -2,13 +2,16 @@
  * Pure data layer for the Trash tool. No React: everything takes a Sanity
  * client, so the same code runs in the Studio and in Node harnesses/tests.
  *
- * "Trash" is virtual: Sanity has no soft delete, so deleted documents only
- * exist in the dataset's transaction log (bounded by the plan's history
- * retention). This module finds real deletions in that log, filtering out
- * the draft-delete noise that publish/discard operations produce, and
- * restores documents from their last pre-deletion revision.
+ * Sanity has no soft delete, so the Trash draws on two sources: the copies
+ * the Studio's Delete action saves (saved.ts), and the dataset's transaction
+ * log, which also sees deletions made outside the Studio but isn't available
+ * on every project and is bounded by the plan's history retention. In the
+ * log, real deletions are told apart from the draft-delete noise that
+ * publish/discard operations produce, and documents are restored from their
+ * last pre-deletion revision.
  */
 import type {SanityClient} from 'sanity'
+import {findSaved, loadSaved, slugOf, titleOf} from './saved'
 
 export interface DeletedDoc {
   /** Published id, or the drafts.* id for never-published documents */
@@ -27,6 +30,8 @@ export interface DeletedDoc {
   draftRevision?: Record<string, any>
   /** True when no recoverable content exists in the history retention window */
   unrecoverable?: boolean
+  /** The saved copy (a trash.* document) the Delete action made, if any */
+  savedId?: string
 }
 
 interface TouchInfo {
@@ -35,6 +40,9 @@ interface TouchInfo {
 }
 
 const DRAFTS = 'drafts.'
+
+/** A saved copy and a logged deletion this close together are the same delete. */
+const SAME_DELETE_MS = 2 * 60_000
 
 /**
  * Hidden plugin-state document recording trash entries that were "deleted
@@ -55,19 +63,33 @@ function purgeKey(id: string, deletedAt: string): string {
   return `${id}@${deletedAt}`
 }
 
-export async function getPurged(client: SanityClient): Promise<Set<string>> {
+function isNear(a: string, b: string): boolean {
+  return Math.abs(Date.parse(a) - Date.parse(b)) < SAME_DELETE_MS
+}
+
+function baseId(id: string): string {
+  return id.startsWith(DRAFTS) ? id.slice(DRAFTS.length) : id
+}
+
+async function purgeEntries(client: SanityClient): Promise<PurgeEntry[]> {
   const entries: PurgeEntry[] | null = await client.fetch(
     '*[_id == $id][0].entries',
     {id: PURGED_DOC_ID},
     {perspective: 'raw', tag: 'trash.purged'} as any,
   )
-  return new Set((entries ?? []).map((e) => purgeKey(e.id, e.deletedAt)))
+  return entries ?? []
+}
+
+export async function getPurged(client: SanityClient): Promise<Set<string>> {
+  return new Set((await purgeEntries(client)).map((e) => purgeKey(e.id, e.deletedAt)))
 }
 
 /**
- * "Delete permanently": hide these trash entries from the Trash tool for all
- * Studio users. Sanity's transaction history itself is immutable: the raw
- * revisions remain readable via the history API until retention expires.
+ * "Delete permanently": remove these entries from the Trash tool for all
+ * Studio users. Saved copies are deleted. Logged deletions are hidden, since
+ * Sanity's transaction history itself is immutable: the raw revisions remain
+ * readable via the history API until retention expires. Saved copies are
+ * recorded as hidden too, so the log can't bring them back.
  */
 export async function purgeFromTrash(client: SanityClient, docs: DeletedDoc[]): Promise<void> {
   const entries: PurgeEntry[] = docs.map((d) => ({
@@ -75,16 +97,50 @@ export async function purgeFromTrash(client: SanityClient, docs: DeletedDoc[]): 
     id: d.id,
     deletedAt: d.deletedAt,
   }))
-  await client.createIfNotExists({_id: PURGED_DOC_ID, _type: PURGED_DOC_ID, entries: []} as any)
-  await client
-    .patch(PURGED_DOC_ID)
-    .setIfMissing({entries: []})
-    .append('entries', entries)
-    .commit()
+  const tx = client
+    .transaction()
+    .createIfNotExists({_id: PURGED_DOC_ID, _type: PURGED_DOC_ID, entries: []} as any)
+    .patch(PURGED_DOC_ID, (patch) => patch.setIfMissing({entries: []}).append('entries', entries))
+  for (const doc of docs) {
+    if (doc.savedId) tx.delete(doc.savedId)
+  }
+  await tx.commit({tag: 'trash.purge'})
 }
 
 function isSystemId(id: string): boolean {
-  return id.startsWith('sanity.') || id.startsWith(`${DRAFTS}sanity.`)
+  return (
+    id.startsWith('sanity.') || id.startsWith(`${DRAFTS}sanity.`) || id.startsWith('trash.')
+  )
+}
+
+/** The history API answers in NDJSON, or with an empty body when it has nothing to give. */
+function ndjson(body: unknown): any[] {
+  if (typeof body !== 'string') return body && typeof body === 'object' ? [body] : []
+  return body
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+}
+
+/**
+ * Documents deleted since `fromTime`, newest first: the saved copies, plus
+ * deletions in the transaction log that have no saved copy (made outside the
+ * Studio, or before the plugin was installed). Where the log can't be read,
+ * the saved copies are all there is.
+ */
+export async function findDeletedDocuments(
+  client: SanityClient,
+  fromTime: string,
+): Promise<DeletedDoc[]> {
+  const [saved, logged] = await Promise.all([
+    findSaved(client, fromTime),
+    findLoggedDeletions(client, fromTime).catch(() => []),
+  ])
+  const unsaved = logged.filter(
+    (doc) =>
+      !saved.some((s) => baseId(s.id) === baseId(doc.id) && isNear(s.deletedAt, doc.deletedAt)),
+  )
+  return [...saved, ...unsaved].sort((a, b) => b.deletedAt.localeCompare(a.deletedAt))
 }
 
 /**
@@ -92,25 +148,21 @@ function isSystemId(id: string): boolean {
  * touched in the window but no longer exist, classified so that drafts
  * consumed by a publish/discard (published doc still exists) are excluded.
  */
-export async function findDeletedDocuments(
-  client: SanityClient,
-  fromTime: string,
-): Promise<DeletedDoc[]> {
+async function findLoggedDeletions(client: SanityClient, fromTime: string): Promise<DeletedDoc[]> {
   const {dataset} = client.config()
-  const [ndjson, purged] = await Promise.all([
-    client.request<string>({
+  const [body, purged] = await Promise.all([
+    client.request<unknown>({
       uri: `/data/history/${dataset}/transactions?fromTime=${encodeURIComponent(
         fromTime,
       )}&excludeContent=true&reverse=true`,
       tag: 'trash.scan',
     }),
-    getPurged(client),
+    purgeEntries(client),
   ])
+  const isPurged = (id: string, at: string) =>
+    purged.some((e) => e.id === id && isNear(e.deletedAt, at))
 
-  const txs = String(ndjson)
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => JSON.parse(line))
+  const txs = ndjson(body)
 
   // reverse=true yields newest first; keeping the first occurrence per id
   // records each document's most recent transaction (= its deletion, for
@@ -159,7 +211,7 @@ export async function findDeletedDocuments(
       // Both gone → reported via the published entry below.
       if (gone.has(base)) continue
       const info = touched.get(id)!
-      if (purged.has(purgeKey(id, info.timestamp))) continue
+      if (isPurged(id, info.timestamp)) continue
       result.push({
         id,
         draftOnly: true,
@@ -172,7 +224,7 @@ export async function findDeletedDocuments(
       // Studio (unpublished or already restored). Not trash.
       if (existing.has(draftId)) continue
       const info = touched.get(id)!
-      if (purged.has(purgeKey(id, info.timestamp))) continue
+      if (isPurged(id, info.timestamp)) continue
       result.push({
         id,
         draftId,
@@ -215,6 +267,7 @@ async function revisionAt(
  * published revision (a draft consumed by the final publish adds nothing).
  */
 export async function loadRevision(client: SanityClient, doc: DeletedDoc): Promise<DeletedDoc> {
+  if (doc.savedId) return loadSaved(client, doc)
   const revision = await revisionAt(client, doc.id, justBefore(doc.deletedAt))
   const out: DeletedDoc = {...doc, revision}
 
@@ -231,8 +284,8 @@ export async function loadRevision(client: SanityClient, doc: DeletedDoc): Promi
   const src = revision ?? out.draftRevision
   if (src) {
     out.type = src._type
-    out.title = src.title ?? src.name ?? src.label ?? undefined
-    out.slug = src.slug?.current
+    out.title = titleOf(src)
+    out.slug = slugOf(src)
   } else {
     out.unrecoverable = true
   }
@@ -260,13 +313,22 @@ export function restoreTarget(doc: DeletedDoc): Record<string, any> | undefined 
 
 /**
  * Restore a deleted document as a draft with its original id (so references
- * reconnect once published). Uses createIfNotExists so an existing draft is
- * never clobbered. Returns the created draft id.
+ * reconnect once published), and drop its saved copy. A document that exists
+ * again is never overwritten. Returns the created draft id.
  */
 export async function restoreDeleted(client: SanityClient, doc: DeletedDoc): Promise<string> {
   const target = restoreTarget(doc)
   if (!target) throw new Error(`No recoverable revision for ${doc.id}`)
-  await client.createIfNotExists(target as any)
+  const id = baseId(doc.id)
+  const existing: number = await client.fetch(
+    'count(*[_id in $ids])',
+    {ids: [id, `${DRAFTS}${id}`]},
+    {perspective: 'raw', tag: 'trash.restore'} as any,
+  )
+  if (existing > 0) throw new Error('This document exists again, so it was left as it is.')
+  const tx = client.transaction().create(target as any)
+  if (doc.savedId) tx.delete(doc.savedId)
+  await tx.commit({tag: 'trash.restore'})
   return target._id as string
 }
 
@@ -277,10 +339,9 @@ export async function restoreDeleted(client: SanityClient, doc: DeletedDoc): Pro
  */
 export async function getHistoryHorizon(client: SanityClient): Promise<string | undefined> {
   const {dataset} = client.config()
-  const ndjson = await client.request<string>({
+  const body = await client.request<unknown>({
     uri: `/data/history/${dataset}/transactions?fromTime=2000-01-01T00:00:00Z&limit=1&excludeContent=true`,
     tag: 'trash.horizon',
   })
-  const first = String(ndjson).split('\n').filter(Boolean)[0]
-  return first ? JSON.parse(first).timestamp : undefined
+  return ndjson(body)[0]?.timestamp
 }
