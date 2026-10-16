@@ -15,9 +15,10 @@ import {
   useToast,
 } from '@sanity/ui'
 import {EyeOpenIcon, RestoreIcon, SearchIcon, SyncIcon, TrashIcon} from '@sanity/icons'
-import {useClient, useDocumentValuePermissions, useSchema, UserAvatar} from 'sanity'
+import {Preview, useClient, useDocumentValuePermissions, useSchema, UserAvatar} from 'sanity'
 import {useRouter} from 'sanity/router'
 import {DetailDialog} from './DetailDialog'
+import type {TrashToolConfig} from './index'
 import {
   findDeletedDocuments,
   getHistoryHorizon,
@@ -28,6 +29,7 @@ import {
   restoreTarget,
   type DeletedDoc,
 } from './lib/history'
+import {DEFAULT_RETENTION_DAYS, emptyExpired} from './lib/saved'
 
 const API_VERSION = '2025-02-19'
 
@@ -39,19 +41,65 @@ const WINDOWS = [
   {days: 0, label: 'All time'},
 ] as const
 
+const SORTS = [
+  {value: 'newest', label: 'Newest first'},
+  {value: 'oldest', label: 'Oldest first'},
+  {value: 'title', label: 'Title A–Z'},
+  {value: 'type', label: 'Type'},
+] as const
+
+type Sort = (typeof SORTS)[number]['value']
+
+const DAY = 86_400_000
+
+const DELETED_AT: Intl.DateTimeFormatOptions = {dateStyle: 'medium', timeStyle: 'short'}
+
 type Status = 'loading' | 'ready' | 'error'
 
-export interface TrashToolOptions {
-  defaultWindowDays?: number
+/** Today, Yesterday, Last 7 days, Last 30 days or Older. */
+function dayGroup(iso: string): string {
+  const midnight = new Date().setHours(0, 0, 0, 0)
+  const time = Date.parse(iso)
+  if (time >= midnight) return 'Today'
+  if (time >= midnight - DAY) return 'Yesterday'
+  if (time >= midnight - 6 * DAY) return 'Last 7 days'
+  if (time >= midnight - 29 * DAY) return 'Last 30 days'
+  return 'Older'
 }
 
-export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
+/** Rows in the chosen order, under date headings, or type headings when sorted by type. */
+function groupDocs(
+  docs: DeletedDoc[],
+  sort: Sort,
+  typeTitle: (type?: string) => string,
+): {label?: string; docs: DeletedDoc[]}[] {
+  const newest = (a: DeletedDoc, b: DeletedDoc) => b.deletedAt.localeCompare(a.deletedAt)
+  const compare: Record<Sort, (a: DeletedDoc, b: DeletedDoc) => number> = {
+    newest,
+    oldest: (a, b) => a.deletedAt.localeCompare(b.deletedAt),
+    title: (a, b) => (a.title ?? '').localeCompare(b.title ?? '', undefined, {sensitivity: 'base'}),
+    type: (a, b) => typeTitle(a.type).localeCompare(typeTitle(b.type)) || newest(a, b),
+  }
+  const sorted = [...docs].sort(compare[sort])
+  if (sort === 'title') return [{docs: sorted}]
+  const groups = new Map<string, DeletedDoc[]>()
+  for (const doc of sorted) {
+    const label = sort === 'type' ? typeTitle(doc.type) : dayGroup(doc.deletedAt)
+    groups.set(label, [...(groups.get(label) ?? []), doc])
+  }
+  return [...groups].map(([label, group]) => ({label, docs: group}))
+}
+
+export function TrashTool(props: {tool: {options?: TrashToolConfig | null}}) {
   const client = useClient({apiVersion: API_VERSION})
   const schema = useSchema()
   const router = useRouter()
   const toast = useToast()
+  const options = props.tool.options
+  const retentionDays = options?.retentionDays ?? DEFAULT_RETENTION_DAYS
 
-  const [windowDays, setWindowDays] = useState(props.tool.options?.defaultWindowDays ?? 30)
+  const [windowDays, setWindowDays] = useState(options?.defaultWindowDays ?? 30)
+  const [sort, setSort] = useState<Sort>('newest')
   const [status, setStatus] = useState<Status>('loading')
   const [error, setError] = useState<string>()
   const [items, setItems] = useState<DeletedDoc[]>([])
@@ -64,6 +112,7 @@ export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [confirmPurge, setConfirmPurge] = useState(false)
   const [purging, setPurging] = useState(false)
+  const [restoringMany, setRestoringMany] = useState(false)
 
   // Purging edits the shared plugin-state document; check the role allows it.
   const purgeDocValue = useMemo(() => ({_id: PURGED_DOC_ID, _type: PURGED_DOC_ID}), [])
@@ -82,7 +131,12 @@ export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
       .then(setHorizon)
       .catch(() => {})
     try {
-      const from = windowDays ? Date.now() - windowDays * 86_400_000 : 0
+      // Copies past the retention period go first, where the role allows it.
+      await emptyExpired(client, retentionDays).catch(() => {})
+      const from = Math.max(
+        windowDays ? Date.now() - windowDays * DAY : 0,
+        retentionDays ? Date.now() - retentionDays * DAY : 0,
+      )
       const fromTime = new Date(from).toISOString()
       const found = await findDeletedDocuments(client, fromTime)
       setItems(found)
@@ -97,21 +151,22 @@ export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
       setError(err?.message ?? String(err))
       setStatus('error')
     }
-  }, [client, windowDays])
+  }, [client, windowDays, retentionDays])
 
   useEffect(() => {
     scan()
   }, [scan])
 
   const searched = useMemo(() => {
+    const kept = items.filter((doc) => !doc.type || !options?.exclude?.includes(doc.type))
     const q = query.trim().toLowerCase()
-    if (!q) return items
-    return items.filter((doc) =>
+    if (!q) return kept
+    return kept.filter((doc) =>
       [doc.title, doc.slug, doc.type, doc.id]
         .filter(Boolean)
         .some((field) => String(field).toLowerCase().includes(q)),
     )
-  }, [items, query])
+  }, [items, query, options])
 
   const types = useMemo(() => {
     const counts = new Map<string, number>()
@@ -128,11 +183,23 @@ export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
 
   const visible = typeFilter ? searched.filter((i) => i.type === typeFilter) : searched
 
+  const groups = useMemo(() => {
+    const typeTitle = (type?: string) => schema.get(type ?? '')?.title ?? type ?? 'Unknown type'
+    return groupDocs(visible, sort, typeTitle)
+  }, [visible, sort, schema])
+
+  // A row's content may still be loading when it's restored.
+  const withContent = useCallback(
+    (doc: DeletedDoc) =>
+      doc.revision || doc.unrecoverable ? Promise.resolve(doc) : loadRevision(client, doc),
+    [client],
+  )
+
   const handleRestore = useCallback(
     async (doc: DeletedDoc) => {
       setBusyId(doc.id)
       try {
-        await restoreDeleted(client, doc)
+        await restoreDeleted(client, await withContent(doc))
         setRestoredIds((prev) => new Set(prev).add(doc.id))
         toast.push({
           status: 'success',
@@ -145,7 +212,7 @@ export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
         setBusyId(undefined)
       }
     },
-    [client, toast],
+    [client, toast, withContent],
   )
 
   const handleOpen = useCallback(
@@ -188,6 +255,37 @@ export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
       return next
     })
   }, [selectable])
+
+  const handleRestoreSelected = useCallback(async () => {
+    setRestoringMany(true)
+    const restored = new Set<string>()
+    const failed: string[] = []
+    for (const doc of selectedDocs) {
+      try {
+        await restoreDeleted(client, await withContent(doc))
+        restored.add(doc.id)
+      } catch {
+        failed.push(doc.title ?? doc.id)
+      }
+    }
+    setRestoredIds((prev) => new Set([...prev, ...restored]))
+    setSelected(new Set())
+    setRestoringMany(false)
+    const count = `${restored.size} document${restored.size === 1 ? '' : 's'}`
+    toast.push(
+      failed.length
+        ? {
+            status: 'warning',
+            title: `Restored ${count} of ${selectedDocs.length} as drafts`,
+            description: `Not restored: ${failed.join(', ')}`,
+          }
+        : {
+            status: 'success',
+            title: `Restored ${count} as drafts`,
+            description: 'Review and publish them to make them live.',
+          },
+    )
+  }, [client, selectedDocs, toast, withContent])
 
   const handlePurge = useCallback(async () => {
     setPurging(true)
@@ -239,18 +337,37 @@ export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
           />
         </Flex>
         <Text size={1} muted>
-          Documents deleted from this dataset, kept until they are restored or deleted
-          permanently. Restore recreates a document as a draft with its original ID. Review and
-          publish it to put it back on the site.
+          {retentionDays
+            ? `Deleted documents are kept here for ${retentionDays} days, then removed for good. `
+            : 'Deleted documents are kept here until they are restored or deleted permanently. '}
+          Restore recreates a document as a draft with its original ID. Review and publish it to
+          put it back on the site.
         </Text>
 
         {status === 'ready' && items.length > 0 && (
-          <TextInput
-            icon={SearchIcon}
-            placeholder="Search by title, slug, or type…"
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-          />
+          <Flex gap={2}>
+            <Box flex={1}>
+              <TextInput
+                icon={SearchIcon}
+                placeholder="Search by title, slug, or type…"
+                value={query}
+                onChange={(event) => setQuery(event.currentTarget.value)}
+              />
+            </Box>
+            <Box flex="none" style={{width: 170}}>
+              <Select
+                aria-label="Sort"
+                value={sort}
+                onChange={(event) => setSort(event.currentTarget.value as Sort)}
+              >
+                {SORTS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+            </Box>
+          </Flex>
         )}
 
         {types.length > 1 && (
@@ -311,12 +428,21 @@ export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
                 onClick={() => setSelected(new Set())}
               />
               <Button
+                icon={RestoreIcon}
+                tone="positive"
+                text="Restore"
+                fontSize={1}
+                loading={restoringMany}
+                disabled={restoringMany || purging}
+                onClick={handleRestoreSelected}
+              />
+              <Button
                 icon={TrashIcon}
                 tone="critical"
                 text="Delete permanently…"
                 fontSize={1}
                 title={!canPurge ? 'Your role does not allow this' : undefined}
-                disabled={!canPurge || purging}
+                disabled={!canPurge || purging || restoringMany}
                 onClick={() => setConfirmPurge(true)}
               />
             </Flex>
@@ -334,19 +460,30 @@ export function TrashTool(props: {tool: {options?: TrashToolOptions | null}}) {
         )}
 
         {status === 'ready' &&
-          visible.map((doc) => (
-            <TrashRow
-              key={doc.id}
-              doc={doc}
-              restored={restoredIds.has(doc.id)}
-              busy={busyId === doc.id}
-              anyBusy={busyId !== undefined}
-              selected={selected.has(doc.id)}
-              onToggleSelected={() => toggleSelected(doc.id)}
-              onDetails={() => setDetail(doc)}
-              onRestore={() => handleRestore(doc)}
-              onOpen={() => handleOpen(doc)}
-            />
+          groups.map((group) => (
+            <Stack key={group.label ?? 'all'} space={2}>
+              {group.label && (
+                <Box paddingTop={2} paddingBottom={1}>
+                  <Text size={1} weight="semibold" muted>
+                    {group.label} ({group.docs.length})
+                  </Text>
+                </Box>
+              )}
+              {group.docs.map((doc) => (
+                <TrashRow
+                  key={doc.id}
+                  doc={doc}
+                  restored={restoredIds.has(doc.id)}
+                  busy={busyId === doc.id}
+                  anyBusy={busyId !== undefined || restoringMany}
+                  selected={selected.has(doc.id)}
+                  onToggleSelected={() => toggleSelected(doc.id)}
+                  onDetails={() => setDetail(doc)}
+                  onRestore={() => handleRestore(doc)}
+                  onOpen={() => handleOpen(doc)}
+                />
+              ))}
+            </Stack>
           ))}
 
         {status === 'ready' && items.some((i) => i.unrecoverable) && (
@@ -450,6 +587,16 @@ function TrashRow(props: {
     props
   const schema = useSchema()
   const loaded = doc.revision !== undefined || doc.unrecoverable
+  const schemaType = doc.type ? schema.get(doc.type) : undefined
+
+  // The Studio's own preview, made from the content alone: without its _id the
+  // deleted document isn't looked up.
+  const content = doc.draftRevision ?? doc.revision
+  const previewValue = useMemo(() => {
+    if (!content) return undefined
+    const {_id, ...rest} = content
+    return rest
+  }, [content])
 
   // Restoring means creating this exact draft; check the user's role allows it.
   const target = useMemo(
@@ -460,26 +607,34 @@ function TrashRow(props: {
   const canRestore = Boolean(permissions?.granted)
 
   return (
-    <Card padding={3} radius={2} border tone={selected ? 'primary' : undefined}>
+    <Card padding={2} radius={2} border tone={selected ? 'primary' : undefined}>
       <Flex align="center" gap={3}>
-        {!restored && (
-          <Box flex="none">
-            <Checkbox checked={selected} onChange={onToggleSelected} />
-          </Box>
-        )}
-        <Stack space={2} flex={1}>
-          <Flex align="center" gap={2}>
-            <Text weight="semibold">{doc.title ?? (loaded ? <em>Untitled</em> : '…')}</Text>
-            {doc.type && <Badge tone="primary">{schema.get(doc.type)?.title ?? doc.type}</Badge>}
+        <Box flex="none" paddingLeft={1} style={{visibility: restored ? 'hidden' : undefined}}>
+          <Checkbox checked={selected} disabled={restored} onChange={onToggleSelected} />
+        </Box>
+        <Box flex={1} style={{minWidth: 0}}>
+          {schemaType && previewValue ? (
+            <Preview schemaType={schemaType} value={previewValue} layout="default" />
+          ) : (
+            <Box padding={2}>
+              <Text weight="semibold" textOverflow="ellipsis">
+                {doc.title ?? (loaded ? <em>Untitled</em> : '…')}
+              </Text>
+            </Box>
+          )}
+        </Box>
+        <Stack space={2} flex="none">
+          <Flex gap={1} justify="flex-end">
+            {doc.type && <Badge tone="primary">{schemaType?.title ?? doc.type}</Badge>}
             {doc.draftOnly && <Badge tone="caution">draft, never published</Badge>}
             {doc.draftRevision && <Badge tone="positive">+ newer draft</Badge>}
             {doc.unrecoverable && <Badge tone="critical">not recoverable</Badge>}
+            {restored && <Badge tone="positive">restored</Badge>}
           </Flex>
-          <Flex align="center" gap={2}>
+          <Flex align="center" gap={2} justify="flex-end">
             <UserAvatar user={doc.deletedBy} size={0} />
             <Text size={1} muted>
-              {doc.slug ? `/${doc.slug} · ` : ''}
-              deleted {new Date(doc.deletedAt).toLocaleString()}
+              {new Date(doc.deletedAt).toLocaleString([], DELETED_AT)}
             </Text>
           </Flex>
         </Stack>
