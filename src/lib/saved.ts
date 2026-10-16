@@ -13,6 +13,9 @@ import type {DeletedDoc} from './history'
 
 export const SAVED_TYPE = 'trash.item'
 
+/** Days a saved copy is kept before it's emptied from the Trash. */
+export const DEFAULT_RETENTION_DAYS = 30
+
 const DRAFTS = 'drafts.'
 
 interface SavedRow {
@@ -56,10 +59,34 @@ export function slugOf(doc: Record<string, any>): string | undefined {
   return typeof doc.slug?.current === 'string' ? doc.slug.current : undefined
 }
 
+/** A copy saved by saveToTrash: what Undo puts back. */
+export interface SavedCopy {
+  savedId: string
+  published?: SanityDocument
+  draft?: SanityDocument
+}
+
+/** Deletes the copies older than `retentionDays` (none when it's 0). */
+function expired(retentionDays = DEFAULT_RETENTION_DAYS) {
+  if (!retentionDays) return []
+  const cutoff = new Date(Date.now() - retentionDays * 86_400_000).toISOString()
+  const query = '*[_type == $type && deletedAt < $cutoff]'
+  return [{delete: {query, params: {type: SAVED_TYPE, cutoff}}}]
+}
+
+/** Empty the copies kept longer than `retentionDays`. */
+export async function emptyExpired(client: SanityClient, retentionDays?: number): Promise<void> {
+  const mutations = expired(retentionDays)
+  if (mutations.length) await client.mutate(mutations, {tag: 'trash.expire'})
+}
+
 /**
- * Save a copy of a document that is about to be deleted. A newer copy replaces
- * older ones of the same document (deleted, brought back another way, then
- * deleted again).
+ * Save a copy of a document that is about to be deleted, as stored in the
+ * dataset: the Studio's own view can lag behind (a publish still on its way).
+ * `published` and `draft` are only used when the dataset has neither, as with
+ * a new document that hasn't been saved yet. A newer copy replaces older ones
+ * of the same document (deleted, brought back another way, then deleted
+ * again), and copies past `retentionDays` are emptied on the way.
  */
 export async function saveToTrash(
   client: SanityClient,
@@ -69,17 +96,33 @@ export async function saveToTrash(
     published?: SanityDocument | null
     draft?: SanityDocument | null
     deletedBy?: string
+    retentionDays?: number
   },
-): Promise<void> {
-  const {id, type, published, draft, deletedBy} = input
+): Promise<SavedCopy | undefined> {
+  const {id, type, deletedBy, retentionDays} = input
+  const draftId = `${DRAFTS}${id}`
+  const stored: SanityDocument[] = await client.fetch(
+    '*[_id in $ids]',
+    {ids: [id, draftId]},
+    {perspective: 'raw', tag: 'trash.save'} as any,
+  )
+  const published = stored.length
+    ? stored.find((doc) => doc._id === id)
+    : (input.published ?? undefined)
+  const draft = stored.length
+    ? stored.find((doc) => doc._id === draftId)
+    : (input.draft ?? undefined)
   const source = draft ?? published
-  if (!source) return
+  if (!source) return undefined
+
+  const savedId = `trash.${crypto.randomUUID()}`
   await client.mutate(
     [
+      ...expired(retentionDays),
       {delete: {query: '*[_type == $type && documentId == $id]', params: {type: SAVED_TYPE, id}}},
       {
         create: {
-          _id: `trash.${crypto.randomUUID()}`,
+          _id: savedId,
           _type: SAVED_TYPE,
           documentId: id,
           documentType: type,
@@ -94,6 +137,22 @@ export async function saveToTrash(
     ],
     {tag: 'trash.save'},
   )
+  return {savedId, published, draft}
+}
+
+/**
+ * Undo a delete: put the published document and its draft back exactly as
+ * they were, and drop the saved copy. Fails if the document exists again.
+ */
+export async function undoDelete(client: SanityClient, copy: SavedCopy): Promise<void> {
+  const tx = client.transaction()
+  for (const doc of [copy.published, copy.draft]) {
+    if (!doc) continue
+    const {_rev, _updatedAt, ...rest} = doc
+    tx.create(rest as any)
+  }
+  tx.delete(copy.savedId)
+  await tx.commit({tag: 'trash.undo'})
 }
 
 /**
@@ -134,9 +193,6 @@ export async function loadSaved(client: SanityClient, doc: DeletedDoc): Promise<
   const draft = saved?.draft ? JSON.parse(saved.draft) : undefined
   const revision = published ?? draft
   if (!revision) return {...doc, unrecoverable: true}
-  const newerDraft =
-    published && draft && String(draft._updatedAt) > String(published._updatedAt)
-      ? draft
-      : undefined
-  return {...doc, revision, draftRevision: newerDraft}
+  // A draft next to a published document holds its unpublished changes.
+  return {...doc, revision, draftRevision: published ? draft : undefined}
 }

@@ -1,7 +1,7 @@
 import {definePlugin} from 'sanity'
 import {TrashIcon} from '@sanity/icons'
 import {TrashTool} from './TrashTool'
-import {withTrash} from './TrashDeleteAction'
+import {trashDelete} from './TrashDeleteAction'
 
 /**
  * Configuration for {@link trashTool}.
@@ -11,6 +11,16 @@ import {withTrash} from './TrashDeleteAction'
 export interface TrashToolConfig {
   /** Initial scan window in days (default 30). */
   defaultWindowDays?: number
+  /**
+   * Days a deleted document is kept in the Trash before it's removed for good
+   * (default 30). 0 keeps it until it's restored or deleted permanently.
+   */
+  retentionDays?: number
+  /**
+   * Document types deleted outright, without a copy in the Trash, e.g. form
+   * submissions holding personal data.
+   */
+  exclude?: string[]
 }
 
 /**
@@ -38,22 +48,28 @@ export interface TrashToolConfig {
  *
  * @public
  */
-export const trashTool = definePlugin<TrashToolConfig | void>((config) => ({
-  name: 'sanity-plugin-trash',
-  tools: [
-    {
-      name: 'trash',
-      title: 'Trash',
-      icon: TrashIcon,
-      component: TrashTool,
-      options: config ?? {},
+export const trashTool = definePlugin<TrashToolConfig | void>((config) => {
+  const options = config ?? {}
+  const withTrash = trashDelete({retentionDays: options.retentionDays})
+  return {
+    name: 'sanity-plugin-trash',
+    tools: [
+      {
+        name: 'trash',
+        title: 'Trash',
+        icon: TrashIcon,
+        component: TrashTool,
+        options,
+      },
+    ],
+    document: {
+      actions: (prev, context) =>
+        options.exclude?.includes(context.schemaType)
+          ? prev
+          : prev.map((action) => (action.action === 'delete' ? withTrash(action) : action)),
     },
-  ],
-  document: {
-    actions: (prev) =>
-      prev.map((action) => (action.action === 'delete' ? withTrash(action) : action)),
-  },
-}))
+  }
+})
 
 export {
   findDeletedDocuments,
@@ -66,4 +82,5 @@ export {
   restoreTarget,
 } from './lib/history'
 export type {DeletedDoc} from './lib/history'
-export {saveToTrash} from './lib/saved'
+export {emptyExpired, saveToTrash, undoDelete} from './lib/saved'
+export type {SavedCopy} from './lib/saved'
